@@ -8,19 +8,20 @@
 
 import 'dart:convert';
 import 'dart:typed_data' show Uint8List;
+
+import 'package:esc_pos_utils/esc_pos_utils.dart';
+import 'package:esc_pos_utils/src/pos_text_with_type.dart';
 import 'package:hex/hex.dart';
 import 'package:image/image.dart';
-import 'package:gbk_codec/gbk_codec.dart';
-import 'package:esc_pos_utils/esc_pos_utils.dart';
-import 'enums.dart';
-import 'commands.dart';
 
-class Generator {
-  Generator(this._paperSize, this._profile, {this.spaceBetweenRows = 5});
+import 'pos_commands.dart';
+
+class PosGenerator {
+  PosGenerator(this._paperSize, this._profile, {this.spaceBetweenRows = 5});
 
   // Ticket config
   final PaperSize _paperSize;
-  CapabilityProfile _profile;
+  PosCapabilityProfile _profile;
   int? _maxCharsPerLine;
   // Global styles
   String? _codeTable;
@@ -65,24 +66,11 @@ class Generator {
     return charsPerLine;
   }
 
-  Uint8List _encode(String text, {bool isKanji = false}) {
-    // replace some non-ascii characters
-    text = text
-        .replaceAll("’", "'")
-        .replaceAll("´", "'")
-        .replaceAll("»", '"')
-        .replaceAll(" ", ' ')
-        .replaceAll("•", '.');
-    if (!isKanji) {
-      return latin1.encode(text);
-    } else {
-      return Uint8List.fromList(gbk_bytes.encode(text));
+  List<PosTextWithType> _splitByTextType(String text) {
+    if (text.isEmpty) {
+      return [];
     }
-  }
-
-  List _getLexemes(String text) {
-    final List<String> lexemes = [];
-    final List<bool> isLexemeChinese = [];
+    final List<PosTextWithType> textWithType = [];
     int start = 0;
     int end = 0;
     bool curLexemeChinese = _isChinese(text[0]);
@@ -90,17 +78,20 @@ class Generator {
       if (curLexemeChinese == _isChinese(text[i])) {
         end += 1;
       } else {
-        lexemes.add(text.substring(start, end + 1));
-        isLexemeChinese.add(curLexemeChinese);
+        textWithType.add(PosTextWithType.fromText(
+          text: text.substring(start, end + 1),
+          isCjk: curLexemeChinese,
+        ));
         start = i;
         end = i;
         curLexemeChinese = !curLexemeChinese;
       }
     }
-    lexemes.add(text.substring(start, end + 1));
-    isLexemeChinese.add(curLexemeChinese);
-
-    return <dynamic>[lexemes, isLexemeChinese];
+    textWithType.add(PosTextWithType.fromText(
+      text: text.substring(start, end + 1),
+      isCjk: curLexemeChinese,
+    ));
+    return textWithType;
   }
 
   /// Break text into chinese/non-chinese lexemes
@@ -145,16 +136,19 @@ class Generator {
 
     // Create a black bottom layer
     final biggerImage = copyResize(image, width: widthPx, height: heightPx);
-    fill(biggerImage, 0);
+    fill(biggerImage, color: ColorRgb8(0, 0, 0));
     // Insert source image into bigger one
-    drawImage(biggerImage, image, dstX: 0, dstY: 0);
+    compositeImage(biggerImage, image, dstX: 0, dstY: 0);
 
     int left = 0;
     final List<List<int>> blobs = [];
 
     while (left < widthPx) {
-      final Image slice = copyCrop(biggerImage, left, 0, lineHeight, heightPx);
-      final Uint8List bytes = slice.getBytes(format: Format.luminance);
+      final Image slice = copyCrop(biggerImage,
+          x: left, y: 0, width: lineHeight, height: heightPx);
+      grayscale(slice);
+      final imgBinary = slice.convert(numChannels: 1);
+      final bytes = imgBinary.getBytes();
       blobs.add(bytes);
       left += lineHeight;
     }
@@ -173,7 +167,7 @@ class Generator {
 
     // R/G/B channels are same -> keep only one channel
     final List<int> oneChannelBytes = [];
-    final List<int> buffer = image.getBytes(format: Format.rgba);
+    final List<int> buffer = image.getBytes(order: ChannelOrder.rgba);
     for (int i = 0; i < buffer.length; i += 4) {
       oneChannelBytes.add(buffer[i]);
     }
@@ -351,15 +345,19 @@ class Generator {
     List<int> bytes = [];
     if (!containsChinese) {
       bytes += _text(
-        _encode(text, isKanji: containsChinese),
+        [PosTextWithType.fromText(text: text, isCjk: containsChinese)],
         styles: styles,
-        isKanji: containsChinese,
         maxCharsPerLine: maxCharsPerLine,
       );
       // Ensure at least one line break after the text
       bytes += emptyLines(linesAfter + 1);
     } else {
-      bytes += _mixedKanji(text, styles: styles, linesAfter: linesAfter);
+      bytes += _text(
+        _splitByTextType(text),
+        styles: styles,
+        maxCharsPerLine: maxCharsPerLine,
+      );
+      bytes += emptyLines(linesAfter + 1);
     }
     return bytes;
   }
@@ -467,7 +465,6 @@ class Generator {
     }
     bool isNextRow = false;
     List<PosColumn> nextRow = <PosColumn>[];
-
     for (int i = 0; i < cols.length; ++i) {
       int colInd =
           cols.sublist(0, i).fold(0, (int sum, col) => sum + col.width);
@@ -479,17 +476,20 @@ class Generator {
 
       if (!cols[i].containsChinese) {
         // CASE 1: containsChinese = false
-        Uint8List encodedToPrint = cols[i].textEncoded != null
-            ? cols[i].textEncoded!
-            : _encode(cols[i].text);
+        var textWithType = cols[i].textEncoded != null
+            ? PosTextWithType.fromEncoded(encodedBytes: cols[i].textEncoded!)
+            : PosTextWithType.fromText(text: cols[i].text);
 
         // If the col's content is too long, split it to the next row
-        int realCharactersNb = encodedToPrint.length;
+        // int realCharactersNb = encodedToPrint.length;
+        int realCharactersNb = textWithType.encodedBytes.length;
         if (realCharactersNb > maxCharactersNb) {
           // Print max possible and split to the next row
           Uint8List encodedToPrintNextRow =
-              encodedToPrint.sublist(maxCharactersNb);
-          encodedToPrint = encodedToPrint.sublist(0, maxCharactersNb);
+              textWithType.encodedBytes.sublist(maxCharactersNb);
+          textWithType = PosTextWithType.fromEncoded(
+              encodedBytes:
+                  textWithType.encodedBytes.sublist(0, maxCharactersNb));
           isNextRow = true;
           nextRow.add(PosColumn(
               textEncoded: encodedToPrintNextRow,
@@ -498,11 +498,11 @@ class Generator {
         } else {
           // Insert an empty col
           nextRow.add(PosColumn(
-              text: '', width: cols[i].width, styles: cols[i].styles));
+              text: ' ', width: cols[i].width, styles: cols[i].styles));
         }
         // end rows splitting
         bytes += _text(
-          encodedToPrint,
+          [textWithType],
           styles: cols[i].styles,
           colInd: colInd,
           colWidth: cols[i].width,
@@ -522,7 +522,6 @@ class Generator {
         }
         String toPrintNextRow = cols[i].text.substring(splitPos);
         String toPrint = cols[i].text.substring(0, splitPos);
-
         if (toPrintNextRow.isNotEmpty) {
           isNextRow = true;
           nextRow.add(PosColumn(
@@ -533,33 +532,23 @@ class Generator {
         } else {
           // Insert an empty col
           nextRow.add(PosColumn(
-              text: '', width: cols[i].width, styles: cols[i].styles));
+              text: ' ', width: cols[i].width, styles: cols[i].styles));
         }
 
         // Print current row
-        final list = _getLexemes(toPrint);
-        final List<String> lexemes = list[0];
-        final List<bool> isLexemeChinese = list[1];
-
-        // Print each lexeme using codetable OR kanji
-        for (var j = 0; j < lexemes.length; ++j) {
-          bytes += _text(
-            _encode(lexemes[j], isKanji: isLexemeChinese[j]),
-            styles: cols[i].styles,
-            colInd: colInd,
-            colWidth: cols[i].width,
-            isKanji: isLexemeChinese[j],
-          );
-          // Define the absolute position only once (we print one line only)
-          // colInd = null;
-        }
+        bytes += _text(
+          _splitByTextType(toPrint),
+          styles: cols[i].styles,
+          colInd: colInd,
+          colWidth: cols[i].width,
+        );
       }
     }
 
     bytes += emptyLines(1);
 
     if (isNextRow) {
-      row(nextRow);
+      bytes += row(nextRow);
     }
     return bytes;
   }
@@ -573,14 +562,12 @@ class Generator {
     bytes += setStyles(PosStyles().copyWith(align: align));
 
     final Image image = Image.from(imgSrc); // make a copy
-    const bool highDensityHorizontal = true;
-    const bool highDensityVertical = true;
 
     invert(image);
-    flip(image, Flip.horizontal);
-    final Image imageRotated = copyRotate(image, 270);
+    flip(image, direction: FlipDirection.horizontal);
+    final Image imageRotated = copyRotate(image, angle: 270);
 
-    const int lineHeight = highDensityVertical ? 3 : 1;
+    const int lineHeight = 3;
     final List<List<int>> blobs = _toColumnFormat(imageRotated, lineHeight * 8);
 
     // Compress according to line density
@@ -592,8 +579,7 @@ class Generator {
     }
 
     final int heightPx = imageRotated.height;
-    const int densityByte =
-        (highDensityHorizontal ? 1 : 0) + (highDensityVertical ? 32 : 0);
+    const int densityByte = 1 + 32;
 
     final List<int> header = List.from(cBitImg.codeUnits);
     header.add(densityByte);
@@ -666,11 +652,11 @@ class Generator {
   /// [height] range: 1 - 255. The units depend on the printer model.
   /// Width, height, font, text position settings are effective until performing of ESC @, reset or power-off.
   List<int> barcode(
-    Barcode barcode, {
+    PosBarcode barcode, {
     int? width,
     int? height,
-    BarcodeFont? font,
-    BarcodeText textPos = BarcodeText.below,
+    PosBarcodeFont? font,
+    PosBarcodeText textPos = PosBarcodeText.below,
     PosAlign align = PosAlign.center,
   }) {
     List<int> bytes = [];
@@ -710,13 +696,13 @@ class Generator {
   List<int> qrcode(
     String text, {
     PosAlign align = PosAlign.center,
-    QRSize size = QRSize.Size4,
-    QRCorrection cor = QRCorrection.L,
+    PosQRSize size = PosQRSize.Size4,
+    PosQRCorrection cor = PosQRCorrection.L,
   }) {
     List<int> bytes = [];
     // Set alignment
     bytes += setStyles(PosStyles().copyWith(align: align));
-    QRCode qr = QRCode(text, size, cor);
+    PosQRCode qr = PosQRCode(text, size, cor);
     bytes += qr.bytes;
     return bytes;
   }
@@ -749,11 +735,13 @@ class Generator {
     int? maxCharsPerLine,
   }) {
     List<int> bytes = [];
-    bytes += _text(textBytes, styles: styles, maxCharsPerLine: maxCharsPerLine);
+    bytes += _text([PosTextWithType.fromEncoded(encodedBytes: textBytes)],
+        styles: styles, maxCharsPerLine: maxCharsPerLine);
     // Ensure at least one line break after the text
     bytes += emptyLines(linesAfter + 1);
     return bytes;
   }
+
   // ************************ (end) Public command generators ************************
 
   // ************************ (end) Internal command generators ************************
@@ -761,10 +749,9 @@ class Generator {
   ///
   /// [colInd] range: 0..11. If null: do not define the position
   List<int> _text(
-    Uint8List textBytes, {
+    List<PosTextWithType> textWithTypes, {
     PosStyles styles = const PosStyles(),
     int? colInd = 0,
-    bool isKanji = false,
     int colWidth = 12,
     int? maxCharsPerLine,
   }) {
@@ -773,13 +760,16 @@ class Generator {
       double charWidth =
           _getCharWidth(styles, maxCharsPerLine: maxCharsPerLine);
       double fromPos = _colIndToPosition(colInd);
-
       // Align
       if (colWidth != 12) {
         // Update fromPos
         final double toPos =
             _colIndToPosition(colInd + colWidth) - spaceBetweenRows;
-        final double textLen = textBytes.length * charWidth;
+        final int textByteLength = textWithTypes.fold(
+            0,
+            (int previousValue, textWithType) =>
+                previousValue + textWithType.encodedBytes.length);
+        final double textLen = textByteLength * charWidth;
 
         if (styles.align == PosAlign.right) {
           fromPos = toPos - textLen;
@@ -790,49 +780,20 @@ class Generator {
           fromPos = 0;
         }
       }
-
       final hexStr = fromPos.round().toRadixString(16).padLeft(3, '0');
       final hexPair = HEX.decode(hexStr);
-
       // Position
       bytes += Uint8List.fromList(
         List.from(cPos.codeUnits)..addAll([hexPair[1], hexPair[0]]),
       );
     }
 
-    bytes += setStyles(styles, isKanji: isKanji);
+    // bytes += setStyles(styles, isKanji: isKanji);
+    textWithTypes.forEach((textWithType) {
+      bytes += setStyles(styles, isKanji: textWithType.isCjk);
 
-    bytes += textBytes;
-    return bytes;
-  }
-
-  /// Prints one line of styled mixed (chinese and latin symbols) text
-  List<int> _mixedKanji(
-    String text, {
-    PosStyles styles = const PosStyles(),
-    int linesAfter = 0,
-    int? maxCharsPerLine,
-  }) {
-    List<int> bytes = [];
-    final list = _getLexemes(text);
-    final List<String> lexemes = list[0];
-    final List<bool> isLexemeChinese = list[1];
-
-    // Print each lexeme using codetable OR kanji
-    int? colInd = 0;
-    for (var i = 0; i < lexemes.length; ++i) {
-      bytes += _text(
-        _encode(lexemes[i], isKanji: isLexemeChinese[i]),
-        styles: styles,
-        colInd: colInd,
-        isKanji: isLexemeChinese[i],
-        maxCharsPerLine: maxCharsPerLine,
-      );
-      // Define the absolute position only once (we print one line only)
-      colInd = null;
-    }
-
-    bytes += emptyLines(linesAfter + 1);
+      bytes += textWithType.encodedBytes;
+    });
     return bytes;
   }
   // ************************ (end) Internal command generators ************************

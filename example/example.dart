@@ -1,11 +1,10 @@
-import 'package:image/image.dart';
-import 'dart:typed_data';
-import 'package:flutter/services.dart';
 import 'package:esc_pos_utils/esc_pos_utils.dart';
+import 'package:flutter/services.dart';
+import 'package:image/image.dart';
 
 Future<void> main() async {
-  final profile = await CapabilityProfile.load();
-  final generator = Generator(PaperSize.mm80, profile);
+  final profile = await PosCapabilityProfile.load();
+  final generator = PosGenerator(PaperSize.mm80, profile);
   List<int> bytes = [];
 
   bytes += generator.text(
@@ -60,7 +59,7 @@ Future<void> main() async {
 
   // Print barcode
   final List<int> barData = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 4];
-  bytes += generator.barcode(Barcode.upcA(barData));
+  bytes += generator.barcode(PosBarcode.upcA(barData));
 
   // Print mixed (chinese + latin) text. Only for printers supporting Kanji mode
   // ticket.text(
@@ -71,4 +70,6 @@ Future<void> main() async {
 
   bytes += generator.feed(2);
   bytes += generator.cut();
+
+  print(bytes);
 }

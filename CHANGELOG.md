@@ -1,8 +1,8 @@
-## [1.1.0]
+## [2.0.0]
 
-- Null-Safety
-- Update libraries
-- Added new printer support: HPRT TP806L
+- migrate image to v4
+- fix generator
+- migrate classname with prefix Pos
 
 ## [1.0.0]
 

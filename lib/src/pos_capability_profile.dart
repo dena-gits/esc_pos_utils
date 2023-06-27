@@ -7,20 +7,20 @@
  */
 
 import 'dart:convert' show json;
-import 'dart:convert' show utf8;
+
 import 'package:flutter/services.dart' show rootBundle;
 
-class CodePage {
-  CodePage(this.id, this.name);
+class PosCodePage {
+  PosCodePage(this.id, this.name);
   int id;
   String name;
 }
 
-class CapabilityProfile {
-  CapabilityProfile._internal(this.name, this.codePages);
+class PosCapabilityProfile {
+  PosCapabilityProfile._internal(this.name, this.codePages);
 
   /// Public factory
-  static Future<CapabilityProfile> load({String name = 'default'}) async {
+  static Future<PosCapabilityProfile> load({String name = 'default'}) async {
     final content = await rootBundle
         .loadString('packages/esc_pos_utils/resources/capabilities.json');
     Map capabilities = json.decode(content);
@@ -31,24 +31,24 @@ class CapabilityProfile {
       throw Exception("The CapabilityProfile '$name' does not exist");
     }
 
-    List<CodePage> list = [];
+    List<PosCodePage> list = [];
     profile['codePages'].forEach((k, v) {
-      list.add(CodePage(int.parse(k), v));
+      list.add(PosCodePage(int.parse(k), v));
     });
 
     // Call the private constructor
-    return CapabilityProfile._internal(name, list);
+    return PosCapabilityProfile._internal(name, list);
   }
 
   String name;
-  List<CodePage> codePages;
+  List<PosCodePage>? codePages;
 
   int getCodePageId(String? codePage) {
     if (codePages == null) {
       throw Exception("The CapabilityProfile isn't initialized");
     }
 
-    return codePages
+    return codePages!
         .firstWhere((cp) => cp.name == codePage,
             orElse: () => throw Exception(
                 "Code Page '$codePage' isn't defined for this profile"))

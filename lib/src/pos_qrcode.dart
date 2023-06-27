@@ -6,45 +6,46 @@
  * See LICENSE for distribution and usage details.
  */
 
-import 'package:esc_pos_utils/src/commands.dart';
 import 'dart:convert';
 
-class QRSize {
-  const QRSize(this.value);
+import 'package:esc_pos_utils/src/pos_commands.dart';
+
+class PosQRSize {
+  const PosQRSize(this.value);
   final int value;
 
-  static const Size1 = QRSize(0x01);
-  static const Size2 = QRSize(0x02);
-  static const Size3 = QRSize(0x03);
-  static const Size4 = QRSize(0x04);
-  static const Size5 = QRSize(0x05);
-  static const Size6 = QRSize(0x06);
-  static const Size7 = QRSize(0x07);
-  static const Size8 = QRSize(0x08);
+  static const Size1 = PosQRSize(0x01);
+  static const Size2 = PosQRSize(0x02);
+  static const Size3 = PosQRSize(0x03);
+  static const Size4 = PosQRSize(0x04);
+  static const Size5 = PosQRSize(0x05);
+  static const Size6 = PosQRSize(0x06);
+  static const Size7 = PosQRSize(0x07);
+  static const Size8 = PosQRSize(0x08);
 }
 
 /// QR Correction level
-class QRCorrection {
-  const QRCorrection._internal(this.value);
+class PosQRCorrection {
+  const PosQRCorrection._internal(this.value);
   final int value;
 
   /// Level L: Recovery Capacity 7%
-  static const L = QRCorrection._internal(48);
+  static const L = PosQRCorrection._internal(48);
 
   /// Level M: Recovery Capacity 15%
-  static const M = QRCorrection._internal(49);
+  static const M = PosQRCorrection._internal(49);
 
   /// Level Q: Recovery Capacity 25%
-  static const Q = QRCorrection._internal(50);
+  static const Q = PosQRCorrection._internal(50);
 
   /// Level H: Recovery Capacity 30%
-  static const H = QRCorrection._internal(51);
+  static const H = PosQRCorrection._internal(51);
 }
 
-class QRCode {
+class PosQRCode {
   List<int> bytes = <int>[];
 
-  QRCode(String text, QRSize size, QRCorrection level) {
+  PosQRCode(String text, PosQRSize size, PosQRCorrection level) {
     // FN 167. QR Code: Set the size of module
     // pL pH cn fn n
     bytes += cQrHeader.codeUnits + [0x03, 0x00, 0x31, 0x43] + [size.value];
